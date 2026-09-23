@@ -5,10 +5,12 @@ import logging
 import os
 import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 
 from api.router import router as api_router
 from core.compliance_engine import evaluate_compliance
@@ -20,6 +22,9 @@ from core.ocr_service import OCRService, extract_raw_text_from_image
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+FRONTEND_INDEX = FRONTEND_DIST / "index.html"
+
 if sys.version_info >= (3, 13):
     logger.warning(
         "PaddleOCR 2.x needs Python 3.10-3.12. This interpreter is %s. Use the backend .venv (Python 3.11).",
@@ -30,6 +35,13 @@ if sys.version_info >= (3, 13):
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     init_db()
+    if FRONTEND_INDEX.is_file():
+        logger.info("Serving React UI from %s (open / in the browser).", FRONTEND_DIST)
+    else:
+        logger.warning(
+            "No built frontend at %s. Run `npm run build` in frontend/, or GET / will return JSON.",
+            FRONTEND_DIST,
+        )
     logger.info("Legal Metrology API started. PaddleOCR loads on the first /analyze-label request.")
     yield
 
@@ -57,14 +69,50 @@ app.add_middleware(
 app.include_router(api_router)
 
 
-@app.get("/")
-async def root():
-    return _health_payload()
-
-
 @app.get("/health")
 async def health():
     return _health_payload()
+
+
+@app.get("/")
+async def root():
+    if FRONTEND_INDEX.is_file():
+        return FileResponse(FRONTEND_INDEX)
+    return JSONResponse(_health_payload())
+
+
+def _dist_file(name: str) -> Path | None:
+    path = (FRONTEND_DIST / name).resolve()
+    try:
+        path.relative_to(FRONTEND_DIST.resolve())
+    except ValueError:
+        return None
+    return path if path.is_file() else None
+
+
+@app.get("/favicon.svg")
+async def favicon_svg():
+    path = _dist_file("favicon.svg")
+    return FileResponse(path) if path else JSONResponse(_health_payload(), status_code=404)
+
+
+@app.get("/favicon.ico")
+async def favicon_ico():
+    path = _dist_file("favicon.ico") or _dist_file("favicon.svg")
+    return FileResponse(path) if path else JSONResponse(_health_payload(), status_code=404)
+
+
+@app.get("/assets/{asset_path:path}")
+async def frontend_assets(asset_path: str):
+    base = (FRONTEND_DIST / "assets").resolve()
+    path = (FRONTEND_DIST / "assets" / asset_path).resolve()
+    try:
+        path.relative_to(base)
+    except ValueError:
+        return JSONResponse({"detail": "Not found"}, status_code=404)
+    if path.is_file():
+        return FileResponse(path)
+    return JSONResponse({"detail": "Not found"}, status_code=404)
 
 
 def _health_payload() -> dict:

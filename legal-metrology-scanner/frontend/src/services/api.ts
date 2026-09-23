@@ -10,7 +10,8 @@ function resolveApiBase(): string {
   if (import.meta.env.DEV) {
     return '/api';
   }
-  return `${window.location.protocol}//${window.location.hostname}:8000`;
+  // Production build served by FastAPI (Cloudflare / localhost:8000): same origin.
+  return '';
 }
 
 export const API_BASE_URL = resolveApiBase();
