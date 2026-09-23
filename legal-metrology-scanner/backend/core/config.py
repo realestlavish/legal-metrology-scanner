@@ -31,11 +31,16 @@ class Settings:
     def __init__(self) -> None:
         gemini = os.getenv("GEMINI_API_KEY") or os.getenv("LLM_API_KEY") or ""
         self.gemini_api_key = gemini.strip()
-        self.gemini_model = (os.getenv("GEMINI_MODEL") or "gemini-2.0-flash").strip()
+        self.gemini_model = (os.getenv("GEMINI_MODEL") or "gemini-3.6-flash").strip()
         self.openai_api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
         self.openai_model = (os.getenv("OPENAI_MODEL") or "gpt-4o-mini").strip()
         self.database_url = (os.getenv("DATABASE_URL") or "sqlite:///./scans.db").strip()
-        self.cors_origins = _csv(os.getenv("CORS_ORIGINS") or "*")
+        # Local Vite plus optional Vercel URL(s). Preview deployments also match
+        # allow_origin_regex in main.py (https://*.vercel.app).
+        self.cors_origins = _csv(
+            os.getenv("CORS_ORIGINS")
+            or "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173"
+        )
         self.ocr_lang = (os.getenv("OCR_LANG") or "en").strip()
         self.max_upload_bytes = int(os.getenv("MAX_UPLOAD_BYTES") or str(12 * 1024 * 1024))
         self.max_images = int(os.getenv("MAX_IMAGES") or "3")

@@ -74,3 +74,14 @@ export async function checkBackendStatus(): Promise<boolean> {
     return false;
   }
 }
+
+export async function getScanHistory(limit = 10): Promise<AnalyzeLabelResponse[]> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/history?limit=${limit}`);
+    if (!response.ok) return [];
+    const payload: unknown = await response.json();
+    return Array.isArray(payload) ? (payload as AnalyzeLabelResponse[]) : [];
+  } catch {
+    return [];
+  }
+}

@@ -57,16 +57,36 @@ export interface ParsedDeclarations {
   };
 }
 
+export interface OCRLine {
+  box?: number[][] | null;
+  text?: string;
+  confidence?: number;
+  height_px?: number;
+  relative_height?: number;
+  image_index?: number;
+}
+
 export interface AnalyzeLabelResponse {
-  filename: string;
+  filename?: string;
   filenames?: string[];
   image_count?: number;
-  raw_text: string;
-  parsed_declarations: ParsedDeclarations;
-  compliance_report: ComplianceReport;
+  raw_text?: string;
+  ocr_lines?: OCRLine[];
+  images?: Array<{
+    filename: string;
+    line_count: number;
+    raw_text: string;
+    ocr_lines?: OCRLine[];
+  }>;
+  parsed_declarations?: ParsedDeclarations;
+  compliance_report?: ComplianceReport;
   parser_backend?: string;
   llm_configured?: boolean;
   scan_id?: number | null;
+  warning?: string | null;
+  id?: number;
+  created_at?: string;
+  overall_status?: string;
 }
 
 export type ScannerStep = 'CAPTURE' | 'CROP' | 'REVIEW' | 'ANALYZING' | 'RESULTS';

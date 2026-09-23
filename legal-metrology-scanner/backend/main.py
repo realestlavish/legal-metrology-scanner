@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import json
 import logging
 import os
@@ -42,12 +43,13 @@ app = FastAPI(
 
 _settings = get_settings()
 _origins = _settings.cors_origins
-_allow_credentials = _origins != ["*"]
+_allow_star = _origins == ["*"]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins,
-    allow_credentials=_allow_credentials,
+    allow_origin_regex=None if _allow_star else r"https://.*\.vercel\.app",
+    allow_credentials=not _allow_star,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -77,6 +79,7 @@ def _health_payload() -> dict:
             "analyze_label": "POST /analyze-label",
             "analyze": "POST /analyze",
             "upload": "POST /upload",
+            "history": "GET /history",
             "health": "GET /health",
         },
     }
@@ -118,7 +121,7 @@ def main() -> None:
         print("=== RAW TEXT ===")
         print(raw_text)
 
-    parsed_json = parse_raw_text_to_json(raw_text)
+    parsed_json = asyncio.run(parse_raw_text_to_json(raw_text))
 
     if args.json_only:
         print("\n=== PARSED LEGAL METROLOGY JSON ===")

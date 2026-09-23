@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { CheckCircle2, XCircle, AlertTriangle, FileText, ChevronDown, ChevronUp, RotateCcw } from 'lucide-react';
-import type { AnalyzeLabelResponse } from '../types/scanner';
+import type { AnalyzeLabelResponse, OCRLine, ParsedDeclarations } from '../types/scanner';
 
 interface ResultsViewProps {
   data: AnalyzeLabelResponse;
@@ -9,12 +9,123 @@ interface ResultsViewProps {
   onReset: () => void;
 }
 
+const BoundedImagePreview: React.FC<{
+  src: string;
+  ocrLines?: OCRLine[];
+}> = ({ src, ocrLines }) => {
+  const imgRef = useRef<HTMLImageElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  const drawCanvas = useCallback(() => {
+    const img = imgRef.current;
+    const canvas = canvasRef.current;
+    if (!img || !canvas || !img.naturalWidth || !img.naturalHeight) return;
+
+    const rect = img.getBoundingClientRect();
+    const renderedWidth = rect.width;
+    const renderedHeight = rect.height;
+    if (!renderedWidth || !renderedHeight) return;
+
+    canvas.width = renderedWidth;
+    canvas.height = renderedHeight;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, renderedWidth, renderedHeight);
+
+    if (!ocrLines || ocrLines.length === 0) return;
+
+    const scaleX = renderedWidth / img.naturalWidth;
+    const scaleY = renderedHeight / img.naturalHeight;
+
+    ocrLines.forEach((line) => {
+      const pts = line?.box;
+      if (!Array.isArray(pts) || pts.length < 3) return;
+      const first = pts[0];
+      if (!Array.isArray(first) || first.length < 2) return;
+      const x0 = Number(first[0]);
+      const y0 = Number(first[1]);
+      if (!Number.isFinite(x0) || !Number.isFinite(y0)) return;
+
+      ctx.beginPath();
+      ctx.moveTo(x0 * scaleX, y0 * scaleY);
+      for (let i = 1; i < pts.length; i++) {
+        const pt = pts[i];
+        if (!Array.isArray(pt) || pt.length < 2) continue;
+        const x = Number(pt[0]);
+        const y = Number(pt[1]);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        ctx.lineTo(x * scaleX, y * scaleY);
+      }
+      ctx.closePath();
+
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#06B6D4';
+      ctx.fillStyle = 'rgba(6, 182, 212, 0.15)';
+      ctx.fill();
+      ctx.stroke();
+    });
+  }, [ocrLines]);
+
+  useEffect(() => {
+    drawCanvas();
+    const handleResize = () => drawCanvas();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [drawCanvas]);
+
+  return (
+    <div style={{ position: 'relative', width: '100%', overflow: 'hidden', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+      <img
+        ref={imgRef}
+        src={src}
+        alt="Scanned product label"
+        onLoad={drawCanvas}
+        style={{ width: '100%', display: 'block', objectFit: 'contain', maxHeight: '280px' }}
+      />
+      <canvas
+        ref={canvasRef}
+        style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
+      />
+    </div>
+  );
+};
+
+function linesForPreview(
+  data: AnalyzeLabelResponse,
+  previewIndex: number,
+  previewCount: number,
+): OCRLine[] {
+  const perImage = data.images?.[previewIndex]?.ocr_lines;
+  if (Array.isArray(perImage) && perImage.length) {
+    return perImage;
+  }
+  const all = Array.isArray(data.ocr_lines) ? data.ocr_lines : [];
+  if (!all.length) return [];
+  const tagged = all.some((line) => typeof line?.image_index === 'number');
+  if (tagged) {
+    return all.filter((line) => line.image_index === previewIndex);
+  }
+  return previewCount <= 1 || previewIndex === 0 ? all : [];
+}
+
 export const ResultsView: React.FC<ResultsViewProps> = ({ data, imageSrc, imageSrcs, onReset }) => {
   const [showRawText, setShowRawText] = useState(false);
-  const { compliance_report, parsed_declarations, raw_text } = data;
-  const isCompliant = compliance_report.is_compliant;
+  const compliance_report = data?.compliance_report;
+  const parsed_declarations = data?.parsed_declarations ?? {};
+  const raw_text = data?.raw_text;
+  const warning = data?.warning;
+  const isCompliant = Boolean(compliance_report?.is_compliant);
   const previews = imageSrcs?.length ? imageSrcs : imageSrc ? [imageSrc] : [];
-  const score = compliance_report.compliance_score ?? 0;
+  const score = compliance_report?.compliance_score ?? 0;
+  const rules = compliance_report?.rules ?? [];
+
+  const nestedReadability = (compliance_report as { parsed_declarations?: ParsedDeclarations } | undefined)
+    ?.parsed_declarations?.readability_analysis;
+  const readability = parsed_declarations?.readability_analysis ?? nestedReadability;
+  const readabilityIssues = Array.isArray(readability?.issues) ? readability.issues : [];
+  const hasReadabilityWarning =
+    (readability && readability.meets_minimum_readability === false) || readabilityIssues.length > 0;
 
   return (
     <div style={{ maxWidth: '960px', margin: '30px auto', padding: '0 20px', paddingBottom: '60px' }}>
@@ -47,7 +158,7 @@ export const ResultsView: React.FC<ResultsViewProps> = ({ data, imageSrc, imageS
               {isCompliant ? 'FULLY COMPLIANT' : 'NON-COMPLIANT (VIOLATIONS DETECTED)'}
             </h2>
             <p style={{ fontSize: '0.95rem', opacity: 0.95, fontWeight: 500 }}>
-              Compliance score {score}% · {compliance_report.summary}
+              Compliance score {score}% · {compliance_report?.summary ?? ''}
             </p>
           </div>
         </div>
@@ -66,6 +177,50 @@ export const ResultsView: React.FC<ResultsViewProps> = ({ data, imageSrc, imageS
         </button>
       </div>
 
+      {/* READABILITY WARNING ALERT BADGE */}
+      {hasReadabilityWarning && (
+        <div style={{
+          background: 'rgba(245, 158, 11, 0.15)',
+          border: '1px solid rgba(245, 158, 11, 0.5)',
+          borderRadius: 'var(--radius-md)',
+          padding: '16px 20px',
+          marginBottom: '24px',
+          color: '#FBBF24',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '1rem', fontWeight: 800 }}>
+            <AlertTriangle size={22} color="#F59E0B" />
+            <span>⚠️ Readability Warning: Text size may be legally too small.</span>
+          </div>
+          {readabilityIssues.length > 0 && (
+            <ul style={{ marginTop: '10px', paddingLeft: '24px', fontSize: '0.9rem', color: '#FDE68A' }}>
+              {readabilityIssues.map((issue, idx) => (
+                <li key={idx} style={{ marginBottom: '4px' }}>{issue}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {/* LOW OCR CONFIDENCE WARNING BANNER */}
+      {warning && (
+        <div style={{
+          background: 'rgba(239, 68, 68, 0.15)',
+          border: '1px solid rgba(239, 68, 68, 0.4)',
+          borderRadius: 'var(--radius-md)',
+          padding: '14px 20px',
+          marginBottom: '24px',
+          color: '#FCA5A5',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px',
+          fontWeight: 700,
+          fontSize: '0.95rem'
+        }}>
+          <AlertTriangle size={22} color="#EF4444" />
+          <span>⚠️ {warning}</span>
+        </div>
+      )}
+
       {/* 2. STATS OVERVIEW CARDS */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '28px' }}>
         <div className="glass-panel" style={{ padding: '20px', textAlign: 'center' }}>
@@ -77,13 +232,13 @@ export const ResultsView: React.FC<ResultsViewProps> = ({ data, imageSrc, imageS
         <div className="glass-panel" style={{ padding: '20px', textAlign: 'center', borderColor: 'var(--compliant-border)', background: 'var(--compliant-bg)' }}>
           <div style={{ fontSize: '0.8rem', color: '#10B981', fontWeight: 600 }}>Passed Statutory Rules</div>
           <div style={{ fontSize: '1.8rem', fontWeight: 800, color: '#10B981', marginTop: '4px' }}>
-            {compliance_report.rules.filter(r => r.passed).length}
+            {rules.filter((r) => r.passed).length}
           </div>
         </div>
         <div className="glass-panel" style={{ padding: '20px', textAlign: 'center', borderColor: 'var(--violation-border)', background: 'var(--violation-bg)' }}>
           <div style={{ fontSize: '0.8rem', color: '#F43F5E', fontWeight: 600 }}>Violations / Non-Compliant</div>
           <div style={{ fontSize: '1.8rem', fontWeight: 800, color: '#F43F5E', marginTop: '4px' }}>
-            {compliance_report.failed_rules_count}
+            {compliance_report?.failed_rules_count ?? rules.filter((r) => !r.passed).length}
           </div>
         </div>
       </div>
@@ -96,15 +251,14 @@ export const ResultsView: React.FC<ResultsViewProps> = ({ data, imageSrc, imageS
           {/* Scanned Image Preview */}
           <div className="glass-panel" style={{ padding: '16px' }}>
             <h3 style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '12px' }}>
-              Scanned Package Image{previews.length > 1 ? 's' : ''}
+              Scanned Package Image{previews.length > 1 ? 's' : ''} (with OCR Text Detection)
             </h3>
-            <div style={{ display: 'grid', gap: '8px' }}>
-              {previews.map((src) => (
-                <img
+            <div style={{ display: 'grid', gap: '12px' }}>
+              {previews.map((src, index) => (
+                <BoundedImagePreview
                   key={src}
                   src={src}
-                  alt="Scanned product label"
-                  style={{ width: '100%', borderRadius: 'var(--radius-sm)', objectFit: 'contain', maxHeight: '220px', border: '1px solid var(--border-subtle)' }}
+                  ocrLines={linesForPreview(data, index, previews.length)}
                 />
               ))}
             </div>
@@ -185,7 +339,7 @@ export const ResultsView: React.FC<ResultsViewProps> = ({ data, imageSrc, imageS
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           <h3 style={{ fontSize: '1.1rem', fontWeight: 800 }}>Rule-by-Rule Compliance Evaluation</h3>
 
-          {compliance_report.rules.map((rule) => {
+          {rules.map((rule) => {
             const isRulePassed = rule.passed;
             return (
               <div

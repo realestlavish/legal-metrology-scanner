@@ -38,12 +38,21 @@ async def analyze_image_payloads(payloads: list[tuple[str, bytes]], lang: str = 
         text = "\n".join(item["text"] for item in items if item.get("text"))
         sections.append(f"--- IMAGE {index}: {filename} ---\n{text}")
         plain_sections.append(text)
-        all_items.extend(items)
+        tagged_items: list[dict[str, Any]] = []
+        for item in items:
+            if isinstance(item, dict):
+                tagged = dict(item)
+                tagged["image_index"] = index - 1
+                tagged_items.append(tagged)
+            else:
+                tagged_items.append({"text": str(item), "box": [], "confidence": 0.0, "image_index": index - 1})
+        all_items.extend(tagged_items)
         per_image.append(
             {
                 "filename": filename,
-                "line_count": len(items),
+                "line_count": len(tagged_items),
                 "raw_text": text,
+                "ocr_lines": tagged_items,
             }
         )
 
@@ -53,10 +62,22 @@ async def analyze_image_payloads(payloads: list[tuple[str, bytes]], lang: str = 
         raise ValueError("PaddleOCR did not detect any text. Capture a sharper, well-lit label photo.")
 
     try:
-        parsed = await asyncio.to_thread(parse_raw_text_to_json, parse_text)
+        parsed = await parse_raw_text_to_json(parse_text)
     except Exception as exc:
         logger.exception("Declaration parsing failed")
         raise RuntimeError(f"Failed to parse OCR text into Legal Metrology fields: {exc}") from exc
+
+    confidences = [
+        float(item["confidence"])
+        for item in all_items
+        if isinstance(item, dict) and item.get("confidence") is not None
+    ]
+    avg_confidence = (sum(confidences) / len(confidences)) if confidences else 0.0
+    warning_msg = (
+        "Image is blurry or poorly lit. OCR results may be inaccurate."
+        if avg_confidence < 0.70
+        else None
+    )
 
     compliance = evaluate_compliance(parsed, all_items)
     filenames = [name for name, _ in payloads]
@@ -82,4 +103,5 @@ async def analyze_image_payloads(payloads: list[tuple[str, bytes]], lang: str = 
         "parser_backend": settings.parser_backend,
         "llm_configured": settings.has_llm_key,
         "scan_id": scan_id,
+        "warning": warning_msg,
     }

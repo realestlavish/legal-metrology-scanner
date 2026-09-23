@@ -6,7 +6,6 @@ import json
 import logging
 import re
 from typing import Any
-
 import httpx
 
 from core.config import get_settings
@@ -44,7 +43,7 @@ MRP is_properly_formatted / inclusive_of_all_taxes must be true only if the labe
 """
 
 
-def parse_raw_text_to_json(raw_text: str) -> dict[str, Any]:
+async def parse_raw_text_to_json(raw_text: str) -> dict[str, Any]:
     settings = get_settings()
     heuristic = parse_raw_text_heuristically(raw_text)
     if not raw_text.strip():
@@ -52,10 +51,10 @@ def parse_raw_text_to_json(raw_text: str) -> dict[str, Any]:
 
     try:
         if settings.gemini_api_key:
-            llm_result = _parse_with_gemini(raw_text, settings.gemini_api_key, settings.gemini_model)
+            llm_result = await _parse_with_gemini(raw_text, settings.gemini_api_key, settings.gemini_model)
             return _merge(heuristic, llm_result)
         if settings.openai_api_key:
-            llm_result = _parse_with_openai(raw_text, settings.openai_api_key, settings.openai_model)
+            llm_result = await _parse_with_openai(raw_text, settings.openai_api_key, settings.openai_model)
             return _merge(heuristic, llm_result)
     except Exception:
         logger.exception("LLM parsing failed; falling back to heuristic parser")
@@ -75,7 +74,7 @@ def _prompt(raw_text: str) -> str:
     )
 
 
-def _parse_with_gemini(raw_text: str, api_key: str, model_name: str) -> dict[str, Any]:
+async def _parse_with_gemini(raw_text: str, api_key: str, model_name: str) -> dict[str, Any]:
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
     payload = {
         "contents": [{"parts": [{"text": _prompt(raw_text)}]}],
@@ -84,8 +83,10 @@ def _parse_with_gemini(raw_text: str, api_key: str, model_name: str) -> dict[str
             "responseMimeType": "application/json",
         },
     }
-    with httpx.Client(timeout=45.0) as client:
-        response = client.post(url, params={"key": api_key}, json=payload)
+    async with httpx.AsyncClient(timeout=45.0) as client:
+        response = await client.post(url, params={"key": api_key}, json=payload)
+        if response.status_code != 200:
+            logger.error("GOOGLE API ERROR: %s", response.text)
         response.raise_for_status()
         body = response.json()
     text = (
@@ -97,7 +98,7 @@ def _parse_with_gemini(raw_text: str, api_key: str, model_name: str) -> dict[str
     return _coerce_json(text)
 
 
-def _parse_with_openai(raw_text: str, api_key: str, model_name: str) -> dict[str, Any]:
+async def _parse_with_openai(raw_text: str, api_key: str, model_name: str) -> dict[str, Any]:
     payload = {
         "model": model_name,
         "temperature": 0.1,
@@ -107,8 +108,8 @@ def _parse_with_openai(raw_text: str, api_key: str, model_name: str) -> dict[str
             {"role": "user", "content": _prompt(raw_text)},
         ],
     }
-    with httpx.Client(timeout=45.0) as client:
-        response = client.post(
+    async with httpx.AsyncClient(timeout=45.0) as client:
+        response = await client.post(
             "https://api.openai.com/v1/chat/completions",
             headers={"Authorization": f"Bearer {api_key}"},
             json=payload,

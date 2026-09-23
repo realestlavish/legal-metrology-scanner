@@ -1,7 +1,9 @@
+import asyncio
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse
 
 from api.pipeline import analyze_image_payloads
+from core.database import get_recent_scans
 
 router = APIRouter()
 
@@ -33,6 +35,15 @@ def _collect_uploads(
         seen_ids.add(id(item))
         unique.append(item)
     return unique
+
+
+@router.get("/history")
+async def get_history(limit: int = Query(default=10, ge=1, le=100)):
+    try:
+        scans = await asyncio.to_thread(get_recent_scans, limit)
+        return JSONResponse(scans)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch scan history: {exc}") from exc
 
 
 @router.post("/analyze-label")
